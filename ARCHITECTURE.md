@@ -1,4 +1,11 @@
-# CUE-HTML Architecture - 責務と契約
+# CUE-HTML Architecture - 責務と契約 v2
+
+> **注意**: このドキュメントは実装フェーズのアーキテクチャ定義です。実装完了後は削除予定です。
+
+## v1→v2 変更点
+- ❌ `schema/htmx.cue` 削除（htmx CDN は render/common.cue に直接埋め込み）
+- ❌ `render/commands.cue` 削除（Makefile に統合）
+- ❌ `scripts/print-html.sh` 削除（Go版のみに集中）
 
 ## 1. レイヤー構造
 
@@ -17,19 +24,25 @@
                             ↓ validates
 ┌─────────────────────────────────────────────────────────────┐
 │                   Render Layer (変換)                        │
-│  render/print-html.cue, render/layout.cue                   │
+│  render/print-html.cue, render/layout.cue, render/export.cue│
 │  [責務] Fragment/Section/Page → HTML文字列への変換          │
 └─────────────────────────────────────────────────────────────┘
                             ↓ produces
 ┌─────────────────────────────────────────────────────────────┐
-│              Command Layer (実行)                            │
-│  render/commands.cue                                        │
-│  [責務] `cue cmd ssg` の定義、JSON export、プリンタ呼び出し  │
+│              Export Layer (JSON生成)                         │
+│  render/export.cue                                          │
+│  [責務] renderedPages 構造の定義、export可能な形式に整形     │
+└─────────────────────────────────────────────────────────────┘
+                            ↓ exported by
+┌─────────────────────────────────────────────────────────────┐
+│                  Build Layer (実行)                          │
+│  Makefile                                                   │
+│  [責務] cue export 実行、プリンタ呼び出し、クリーンアップ     │
 └─────────────────────────────────────────────────────────────┘
                             ↓ calls
 ┌─────────────────────────────────────────────────────────────┐
 │                  Printer Layer (出力)                        │
-│  cmd/html-printer/main.go or scripts/print-html.sh         │
+│  cmd/html-printer/main.go                                   │
 │  [責務] JSON → ファイルシステムへの書き出しのみ               │
 └─────────────────────────────────────────────────────────────┘
                             ↓ writes
@@ -83,20 +96,9 @@
 - `cue vet ./...` で全検証が実行可能
 - エラーメッセージは具体的（どのページ・セクションが違反しているか明示）
 
-#### `schema/htmx.cue`
-
-**責務**:
-- htmx 属性の型定義
-  - `hxGet?: string` - hx-get の URL
-  - `hxTarget?: string` - hx-target のセレクタ
-  - `hxTrigger?: string` - hx-trigger のイベント
-- htmx CDN URL の定数定義
-  - `htmxVersion: "2.0.8"`
-  - `htmxCdnUrl: "https://cdn.jsdelivr.net/npm/htmx.org@2.0.8/dist/htmx.min.js"`
-  - `htmxIntegrity: "sha384-..."`
-
-**契約**:
-- htmx バージョンアップ時はこのファイルのみ変更すればよい設計
+**削除**: `schema/htmx.cue` は v1 では作成しません
+- htmx CDN の `<script>` タグは `render/common.cue` に直接埋め込み
+- hx-get 等の動的属性は Phase 7（将来）で実装時に schema/htmx.cue を追加
 
 ---
 
@@ -108,7 +110,8 @@
 - `<head>` タグの生成
   - `<meta charset="UTF-8">`
   - `<meta name="viewport" ...>`
-  - htmx CDN script タグ
+  - **htmx CDN script タグ**（v1では直接埋め込み）
+    - 例: `<script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.8/dist/htmx.min.js" integrity="..." crossorigin="anonymous"></script>`
   - canonical link（ページごとに動的）
 - `<footer>` タグの生成
 - 共通 CSS（インライン or 外部リンク）
@@ -116,6 +119,7 @@
 **契約**:
 - `headHtml(page: #Page) -> string` 関数を提供
 - `footerHtml() -> string` 関数を提供
+- htmx バージョンアップ時はこのファイルの `<script>` タグを更新
 
 #### `render/layout.cue`
 
@@ -150,22 +154,39 @@
 - 構造: `[{ path: string, html: string }, ...]`
 - `html` は `<!DOCTYPE html>` から始まる完全なHTML
 
-#### `render/commands.cue`
+#### `render/export.cue`
 
 **責務**:
-- `cue cmd ssg` コマンドの定義
+- `renderedPages` 構造の定義
+  - `[{ path: string, html: string }, ...]` の形式
+- export 可能な形に整形
+  - `cue export -e render.renderedPages` で取得可能にする
+
+**契約**:
+- `render.renderedPages` という名前で export される
+- この段階ではファイル出力はしない（JSON構造の定義のみ）
+
+---
+
+### 2.3 Build Layer
+
+#### `Makefile`
+
+**責務**:
+- `ssg` ターゲットの定義
 - 実行フロー:
   1. `cue export -e render.renderedPages > tmp/renderedPages.json`
   2. `go run ./cmd/html-printer tmp/renderedPages.json ./out`
   3. `rm tmp/renderedPages.json`（クリーンアップ）
 
 **契約**:
-- `tool/exec` を使用
-- 一時ファイルは `tmp/` に格納（git ignore）
+- `make ssg` で HTML 生成が完結
+- CUE と Go の橋渡し役
+- エラーハンドリング（cue export 失敗時は printer を呼ばない）
 
 ---
 
-### 2.3 Content Layer
+### 2.4 Content Layer
 
 #### `content/fragments/common.cue`
 
@@ -230,7 +251,7 @@
 
 ---
 
-### 2.4 Printer Layer
+### 2.5 Printer Layer
 
 #### `cmd/html-printer/main.go`
 
@@ -251,28 +272,27 @@
 - 終了コード: 0（成功）, 1（失敗）
 - **テンプレートロジックは一切持たない**（単なる書き出し器）
 
-#### `scripts/print-html.sh`
-
-**責務**:
-- Go版の代替実装（sh + jq）
-- 同じ入力・出力契約
-
-**契約**:
-- Go版と同じ
+**削除**: `scripts/print-html.sh` は v1 では実装しません
+- Go版のみに集中（将来の拡張性を考慮）
+- 必要になったら後で追加可能
 
 ---
 
-### 2.5 Test Layer
+### 2.6 Test Layer
 
 #### `tests/validation_test.cue`
 
 **責務**:
-- バリデーション制約の網羅的テスト
-- 正常系・異常系のサンプルを用意
+- **異常系テスト**: わざと制約違反のデータを作成
   - path重複エラー
   - fragmentId不在エラー
   - level飛び級エラー
   - 複数H1エラー
+- `cue vet` を実行して「エラーが出ること」を確認
+
+**役割の明確化**:
+- 正常系: `schema/validation.cue` の制約定義
+- 異常系: `tests/validation_test.cue` でエラー発火テスト
 
 **契約**:
 - `cue vet ./tests/validation_test.cue` で実行
@@ -296,8 +316,12 @@
 - 全HTMLファイルに htmx CDN が含まれるかチェック
 - 手順:
   1. `find out/ -name "*.html"` で全HTML取得
-  2. 各ファイルで `grep -q "htmx.org@2.0.8"`
+  2. 各ファイルで `grep -q "htmx.org"`（**バージョン非依存**）
   3. 含まれないファイルがあれば exit 1
+
+**バージョン非依存の理由**:
+- htmx のバージョンアップ時にテストが壊れないようにする
+- `@2.0.8` のようなバージョン番号は見ない
 
 **契約**:
 - 終了コード: 0（全て含む）, 1（未含あり）
@@ -336,11 +360,16 @@
 |-------|--------|---------|
 | Content | Schema | 型定義に準拠 |
 | Render | Schema, Content | 型定義を使い、コンテンツ値を変換 |
-| Command | Render | renderedPages を出力 |
-| Printer | Command | JSON を受け取る |
-| Test | Schema, Render | バリデーション・出力検証 |
+| Export | Render | renderedPages 構造を定義 |
+| Build (Makefile) | Export, Printer | cue export を実行し、Printer を呼び出す |
+| Printer | - | JSON を受け取るのみ（他レイヤーに依存しない） |
+| Test | Schema, Render, Printer | バリデーション・出力検証 |
 
-**循環依存禁止**: Schema → Content → Render → Command → Printer の一方向のみ
+**循環依存禁止**: Schema → Content → Render → Export → Build → Printer の一方向のみ
+
+**v1→v2 変更点**:
+- Command Layer（render/commands.cue）を Build Layer（Makefile）に置き換え
+- Printer は JSON のみを受け取る純粋な出力器（他レイヤーへの依存なし）
 
 ---
 
@@ -357,15 +386,17 @@
 - Printer（JSON構造は同じ）
 - Test（自動的に検証対象になる）
 
-### 5.2 htmx 動的差し替え機能追加
+### 5.2 htmx 動的差し替え機能追加（Phase 7）
 
 **変更箇所**:
-1. `schema/htmx.cue`: `#Section` に `hxGet?` フィールド追加
-2. `render/print-html.cue`: `hxGet` が存在する場合 `hx-get` 属性を付与
-3. `tests/htmx_check.sh`: `hx-get` 属性の検証追加
+1. `schema/htmx.cue`: **新規作成** - `#Section` に `hxGet?`, `hxTarget?` フィールド追加
+2. `schema/model.cue`: `#Section` を `schema/htmx.cue` の型を使うように変更
+3. `render/print-html.cue`: `hxGet` が存在する場合 `hx-get` 属性を付与
+4. `tests/htmx_check.sh`: `hx-get` 属性の検証追加
 
 **変更不要**:
-- Printer（HTML文字列は変わるが、構造は同じ）
+- Printer（HTML文字列は変わるが、JSON構造は同じ）
+- Makefile（ビルドフローは変わらない）
 
 ### 5.3 マルチサイト対応
 
@@ -396,7 +427,7 @@
 
 ### 6.2 Go vs sh プリンタ
 
-**採用案**: Go版を実装
+**採用案**: Go版のみ実装
 
 **トレードオフ**:
 - ✅ メリット: 将来の拡張（minify, 差分出力）が楽
@@ -407,7 +438,7 @@
 - ✅ メリット: 実装が超簡単
 - ❌ デメリット: 複雑なロジック追加が困難
 
-**結論**: Go版を採用。sh版はドキュメントに参考実装として残す。
+**結論（v2）**: Go版のみ実装。sh版は v1 では作成しない（必要になったら後で追加）。
 
 ### 6.3 スナップショットテストの粒度
 
