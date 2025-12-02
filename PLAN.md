@@ -27,7 +27,7 @@ cue-html/
 ├── cue.mod/                     # [責務] CUEモジュールルート
 │   └── module.cue               # [責務] モジュール名・バージョン定義
 │
-├── schema/                      # [責務] 型定義とバリデーションルールの集約
+├── schema/                      # [責務] 型定義とバリデーション
 │   ├── model.cue                # [責務] #Fragment/#Section/#Page 型定義
 │   └── validation.cue           # [責務] 参照整合性・path重複・H1/level制約
 │
@@ -83,9 +83,41 @@ cue-html/
 
 ---
 
-## 2. DoD（Definition of Done）詳細化
+## 2. CUE インターフェース（契約）
 
-### 2.1 機能完成の定義
+### 2.1 `schema/model.cue` - 型定義
+
+```cue
+#Fragment: {
+    id:       string
+    title:    string
+    bodyHtml: string  // h*タグなし、正規化されたHTML
+}
+
+#Section: {
+    id:         string
+    level:      1 | 2 | 3
+    parentId?:  string
+    fragmentId: string
+}
+
+#Page: {
+    id:           string
+    kind:         "docs" | "article" | "lp"
+    path:         string  // 例: /docs/intro
+    sections:     [...#Section]
+    canonical?:   string
+    indexPolicy?: "index" | "noindex"
+}
+```
+
+### 2.2 `schema/validation.cue` - 制約
+
+- 1ページ1 H1（level == 1 は1つだけ）
+- level 飛び級禁止（1→3はエラー）
+- fragmentId が必ず既知の Fragment を指す
+- path が一意
+- parentId が必ず同一ページ内の既存 Section を指す
 
 #### 必須機能（v1）
 - [ ] `make ssg` で docs/articles/LP の HTML が生成される
@@ -103,14 +135,11 @@ cue-html/
 - ❌ 差分ビルド → パフォーマンス問題が出たら検討
 - ❌ HTML minify → 必要になったら追加
 
-### 2.2 品質基準
+// Section → HTML変換
+sectionHtml: (section: #Section, fragment: #Fragment) -> string
 
-#### CUEバリデーション
-- [ ] `cue vet ./...` がゼロエラーで通る
-- [ ] fragmentId の参照整合性が保証される
-- [ ] path の重複チェックが動作する
-- [ ] 1ページ1つの H1 制約が検証される
-- [ ] level 飛び級（1→3）がエラーになる
+// Page → 完全なHTML生成
+pageHtml: (page: #Page) -> string
 
 #### HTML品質
 - [ ] `<!DOCTYPE html>` が全ページに存在
@@ -122,7 +151,11 @@ cue-html/
 - v1では自動チェックを含めません（vnu.jar 等のツール導入コストを避けるため）
 - 重要ページは手動で https://validator.w3.org/ にて確認
 
-### 2.3 テスト基準
+**責務**:
+- `headHtml`: `<meta charset>`, `<meta viewport>`, htmx CDN `<script>`、canonical
+- `sectionHtml`: `<section id="..."><h{level}>title</h{level}>bodyHtml</section>`
+- `pageHtml`: sectionsHtml を `\n` で join して `<html>...</html>` で包む
+- `renderedPages`: 全ページについて `{ path: page.path, html: pageHtml(page) }` を生成
 
 #### 自動テスト
 - [ ] `tests/validation_test.cue` が全制約を検証
@@ -140,7 +173,7 @@ cue-html/
 - [ ] 生成HTMLをブラウザで開いて表示確認
 - [ ] 代表的な3ページを W3C Validator で手動確認
 
-### 2.4 ドキュメント基準
+### 3.1 CUE の完成基準（必須）
 
 - [ ] README.md に以下が記載される
   - プロジェクト目的
@@ -152,7 +185,7 @@ cue-html/
 - [ ] schema/model.cue に型定義のコメント
 - [ ] render/print-html.cue に変換ロジックのコメント
 
-### 2.5 デプロイ準備基準
+### 3.2 HTML品質の基準（手動確認）
 
 - [ ] 生成HTMLが R2 / S3 等への配置に適した構造（/path/index.html）
 - [ ] CI でブランチへのpush時に自動ビルドが走る
@@ -160,11 +193,11 @@ cue-html/
 
 ---
 
-## 3. 作業計画（6 Phase）
+## 4. 作業計画（4 Phase）
 
-### Phase 1: 環境セットアップ（1-2h）
+### Phase 1: 環境セットアップ（1h）
 
-**目的**: Nix + CUE + Go の開発環境を構築
+**目的**: CUEモジュールと基本構造を準備
 
 **タスク**:
 1. `flake.nix` 作成
@@ -177,23 +210,18 @@ cue-html/
 5. `README.md` 初期版作成
 
 **完了条件**:
-- `nix develop` で環境に入れる
-- `cue version` / `go version` が動作
-
-**想定課題**:
-- Nix の flake 構文に慣れていない場合、公式ドキュメント参照が必要
+- `cue version` が動作する
+- ディレクトリ構造が整っている
 
 ---
 
-### Phase 2: スキーマ定義（2-3h）
+### Phase 2: スキーマ定義（2h）
 
 **目的**: #Fragment/#Section/#Page 型を定義し、バリデーションルールを実装
 
 **タスク**:
 1. `schema/model.cue` 作成
-   - `#Fragment` 定義（id, title, bodyHtml）
-   - `#Section` 定義（id, level, parentId?, fragmentId）
-   - `#Page` 定義（id, kind, path, sections, canonical?）
+   - `#Fragment`, `#Section`, `#Page` 定義
 2. `schema/validation.cue` 作成
    - path 重複チェック
    - fragmentId 参照整合性
@@ -207,16 +235,13 @@ cue-html/
 
 **完了条件**:
 - `cue vet ./schema` が通る
-- 制約違反の例を作ってエラーが出ることを確認
-
-**想定課題**:
-- CUE の参照整合性の書き方（`#Page.sections[].fragmentId in #Fragment.id`）
+- 制約違反の例でエラーが出ることを確認
 
 ---
 
 ### Phase 3: レンダリング実装（3-4h）
 
-**目的**: CUE で Section→HTML 変換ロジックを実装
+**目的**: CUE で HTML 文字列を組み立て、renderedPages を出力
 
 **タスク**:
 1. `render/common.cue` 作成
@@ -247,19 +272,16 @@ cue-html/
 
 ---
 
-### Phase 4: コンテンツ定義（1-2h）
+### Phase 4: 検証とサンプルスクリプト（2h）
 
 **目的**: サンプルコンテンツを作成し、JSON出力を確認
 
 **タスク**:
-1. `content/fragments/common.cue` 作成
-   - 3つ程度のサンプルフラグメント
-2. `content/pages/docs.cue` 作成
-   - 1つのdocsページ定義
-3. `content/pages/articles.cue` 作成
-   - 1つの記事ページ定義
-4. `content/pages/lp.cue` 作成
-   - 1つのLPページ定義
+1. `cue vet ./...` でバリデーション確認
+2. 代表3ページをブラウザで手動確認（JSON の html をファイルに保存して開く）
+3. （オプション）`scripts/print-html.sh` 作成
+   - 標準入力からJSONを読み、out/**/index.html に書き出し
+4. README.md に使用例を追加
 
 **完了条件**:
 - 3種類のページが renderedPages に含まれる
@@ -271,7 +293,7 @@ cue-html/
 
 ---
 
-### Phase 5: プリンタ実装（1-2h）
+## 5. 未解決事項（最小限）
 
 **目的**: Go で JSON→HTML ファイル書き出しを実装
 
@@ -303,9 +325,9 @@ cue-html/
 
 ---
 
-### Phase 6: テストとCI（2-3h）
+## 6. 明示的な範囲外（v1では実装しない）
 
-**目的**: DoD を満たすテストを実装し、CI で自動実行
+以下は**このrepoの責務ではない**、または**将来の拡張**として扱う：
 
 **タスク**:
 1. `tests/validation_test.cue` 作成（v1→v2 明確化）
@@ -331,7 +353,7 @@ cue-html/
 
 ---
 
-## 4. 未解決事項（明示的な疑問点）
+## 7. アーキテクチャの核心（再確認）
 
 ### 4.1 フラグメント粒度
 - **現状**: 1段落単位 vs 1セクション単位が未決定
@@ -356,9 +378,30 @@ cue-html/
 - **v1方針**: 単一サイト前提（siteId なし）
 - **Phase 9（将来）**: siteId を #Page に追加するか、repo を分けるか検討
 
----
+```
+┌─────────────────────────────────────┐
+│   Schema Layer (型・制約)            │
+│   schema/model.cue                  │
+│   schema/validation.cue             │
+└─────────────────────────────────────┘
+              ↓ 使用
+┌─────────────────────────────────────┐
+│   Content Layer (値)                │
+│   content/fragments.cue             │
+│   content/pages.cue                 │
+└─────────────────────────────────────┐
+              ↓ 変換
+┌─────────────────────────────────────┐
+│   Render Layer (HTML生成)           │
+│   render/html.cue                   │
+│   → renderedPages 出力              │
+└─────────────────────────────────────┘
+              ↓ export
+         (このrepoのゴール)
+```
 
-## 5. リスクと対策
+### このrepoの成果物
+**`cue export -e render.renderedPages` で得られるJSON**
 
 | リスク | 影響 | 対策 |
 |--------|------|------|
@@ -370,7 +413,7 @@ cue-html/
 
 ---
 
-## 6. マイルストーン
+## 8. マイルストーン
 
 | マイルストーン | 完了条件 | 期日目安 |
 |--------------|---------|---------|
@@ -384,7 +427,11 @@ cue-html/
 
 ---
 
-## 7. 次のアクション
+## 9. 次のアクション
+
+### 実装開始前の確認
+- [ ] この v3 方針に合意
+- [ ] Phase 1 から順次着手
 
 ### 実装開始前の最終確認
 - [ ] この v2 計画書の内容に合意

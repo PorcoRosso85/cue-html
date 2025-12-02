@@ -7,27 +7,40 @@
 - ❌ `render/commands.cue` 削除（Makefile に統合）
 - ❌ `scripts/print-html.sh` 削除（Go版のみに集中）
 
-## 1. レイヤー構造
+> **注意**: このドキュメントは実装フェーズのアーキテクチャ定義です。実装完了後は削除予定です。
+
+## v3 の方針（根本的な見直し）
+
+### このrepoのゴール
+**「CUEで `renderedPages: [{ path, html }]` を出すこと」**
+
+それ以外（ファイル書き出し、ビルドシステム、CI等）は設計範囲外。
+
+### v2からの根本的変更
+- ❌ **Build Layer削除** - Makefile等はこのrepoの責務ではない
+- ❌ **Printer Layer削除** - JSONを書き出すだけのコードは設計対象外
+- ❌ **Export Layer削除** - Render Layerに統合
+- ✅ **レイヤーを3つに単純化**: Schema, Content, Render
+- ✅ **render/ を1ファイルに統合**: render/html.cue
+- ✅ **content/ も2ファイルに統合**: fragments.cue, pages.cue
+
+---
+
+## 1. レイヤー構造（3層のみ）
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Content Layer (値)                        │
-│  content/fragments/*.cue, content/pages/*.cue               │
-│  [責務] 実際のコンテンツを定義（HTML文字列、ページ構造）      │
-└─────────────────────────────────────────────────────────────┘
-                            ↓ uses
-┌─────────────────────────────────────────────────────────────┐
-│                    Schema Layer (型)                         │
+│                   Schema Layer (型・制約)                     │
 │  schema/model.cue, schema/validation.cue                    │
-│  [責務] 型定義と制約ルールの提供                              │
+│  [責務] #Fragment/#Section/#Page 型定義と制約ルール           │
 └─────────────────────────────────────────────────────────────┘
-                            ↓ validates
+                            ↓ 使用
 ┌─────────────────────────────────────────────────────────────┐
 │                   Render Layer (変換)                        │
 │  render/print-html.cue, render/layout.cue, render/export.cue│
 │  [責務] Fragment/Section/Page → HTML文字列への変換          │
 └─────────────────────────────────────────────────────────────┘
-                            ↓ produces
+                            ↓ 変換
 ┌─────────────────────────────────────────────────────────────┐
 │              Export Layer (JSON生成)                         │
 │  render/export.cue                                          │
@@ -51,7 +64,15 @@
 │  out/**/*.html                                              │
 │  [成果物] 完全なcanonical HTML（SEO対応、htmx対応）         │
 └─────────────────────────────────────────────────────────────┘
+                            ↓
+                  (このrepoのゴール)
+            `cue export -e render.renderedPages`
 ```
+
+### v2から削除したレイヤー
+- ❌ **Export Layer** - Render Layerに統合（renderedPages は render/html.cue で定義）
+- ❌ **Build Layer** - このrepoの責務外（利用者が Makefile 等を別途用意）
+- ❌ **Printer Layer** - このrepoの責務外（サンプルスクリプトとして scripts/ に配置）
 
 ---
 
@@ -197,57 +218,48 @@
   - `frag-cta`: CTA文言
   - `frag-privacy`: プライバシーポリシー要約
 
+**構造**:
+```cue
+fragments: {
+    "frag-intro": {
+        id: "frag-intro"
+        title: "はじめに"
+        bodyHtml: "<p>...</p>"
+    }
+    // ...
+}
+```
+
 **契約**:
-- `fragments: { [id: string]: #Fragment }`
 - 各フラグメントは `schema/model.cue` の `#Fragment` 型に準拠
+- `bodyHtml` は正規化されたHTML（h*タグなし、well-formed）
 
-#### `content/fragments/docs.cue`
-
-**責務**:
-- docs 専用のフラグメント定義
-- 例:
-  - `frag-docs-overview`: docsトップの概要
-  - `frag-api-reference`: API仕様
-
-**契約**:
-- `common.cue` と同じ構造
-
-#### `content/pages/docs.cue`
+#### `content/pages.cue`
 
 **責務**:
-- `/docs/**` のページ定義
-- 例:
-  ```cue
-  pages: [{
-    id: "docs-intro"
-    kind: "docs"
-    path: "/docs/intro"
-    sections: [
-      { id: "s1", level: 1, fragmentId: "frag-docs-overview" },
-      { id: "s2", level: 2, fragmentId: "frag-api-reference", parentId: "s1" }
-    ]
-  }]
-  ```
+- `/docs/**`, `/articles/**`, `/solo/**` のページ定義
+- 各ページは `#Page` 型に準拠
+- `sections` で使用するフラグメントを参照
+
+**構造**:
+```cue
+pages: [
+    {
+        id: "docs-intro"
+        kind: "docs"
+        path: "/docs/intro"
+        sections: [
+            { id: "s1", level: 1, fragmentId: "frag-intro" },
+            // ...
+        ]
+    },
+    // ...
+]
+```
 
 **契約**:
-- `pages: [...#Page]`
 - 全ページが `schema/validation.cue` の制約を満たす
-
-#### `content/pages/articles.cue`
-
-**責務**:
-- `/articles/**` のページ定義
-
-**契約**:
-- `docs.cue` と同じ
-
-#### `content/pages/lp.cue`
-
-**責務**:
-- `/solo/**` pSEO LP のページ定義
-
-**契約**:
-- `docs.cue` と同じ
+- `fragmentId` は `content/fragments.cue` で定義されたものを参照
 
 ---
 
@@ -276,7 +288,7 @@
 - Go版のみに集中（将来の拡張性を考慮）
 - 必要になったら後で追加可能
 
----
+**1. headHtml(page: #Page) -> string**
 
 ### 2.6 Test Layer
 
@@ -294,23 +306,23 @@
 - 正常系: `schema/validation.cue` の制約定義
 - 異常系: `tests/validation_test.cue` でエラー発火テスト
 
-**契約**:
-- `cue vet ./tests/validation_test.cue` で実行
-- 異常系は意図的にエラーになることを確認
+**2. sectionHtml(section: #Section, fragment: #Fragment) -> string**
 
-#### `tests/snapshot_test.sh`
+- Section → HTML 変換
+- 出力例: `<section id="s1"><h1>タイトル</h1><p>本文...</p></section>`
+- `level` に応じて `<h1>` / `<h2>` / `<h3>` を決定
+- `fragment.title` と `fragment.bodyHtml` を組み合わせる
 
-**責務**:
-- 生成HTMLと期待値の diff 検証
-- 手順:
-  1. `cue cmd ssg` を実行
-  2. `out/docs/example/index.html` と `tests/snapshots/docs_example.html` を diff
-  3. 差分があれば exit 1
+**3. pageHtml(page: #Page) -> string**
 
-**契約**:
-- 終了コード: 0（一致）, 1（差分あり）
+- Page → 完全なHTML生成
+- 処理フロー:
+  1. 全 `sections` をループして `sectionHtml` で変換
+  2. sectionsHtml を `\n` で join
+  3. `kind` による分岐（docs/article/lp でレイアウト差を実装）
+  4. `<html><head>...</head><body>...</body></html>` で包む
 
-#### `tests/htmx_check.sh`
+**4. renderedPages: [{ path: string, html: string }, ...]**
 
 **責務**:
 - 全HTMLファイルに htmx CDN が含まれるかチェック
@@ -324,32 +336,46 @@
 - `@2.0.8` のようなバージョン番号は見ない
 
 **契約**:
-- 終了コード: 0（全て含む）, 1（未含あり）
+- `renderedPages` の各要素は以下を満たす:
+  - `path` が `/docs/**`, `/articles/**`, `/solo/**` のいずれかに一致
+  - `html` が `<!DOCTYPE html>` から始まる
+  - `<head>` 内に `htmx.org` を含む `<script>` タグがある
+- htmx バージョンアップ時はこのファイルの `<script>` タグを更新
 
 ---
 
 ## 3. データフロー図
 
 ```
-[content/fragments/*.cue]
+[content/fragments.cue]
         ↓ defines
-[Fragment値集合] ←────────┐
-        ↓                 │
-[content/pages/*.cue]      │
-        ↓ uses            │
-[Page値集合]              │
-        ↓                 │
-[render/print-html.cue]   │
-        ↓ references ─────┘
-[renderedPages JSON]
+[Fragment値集合]
         ↓
-[cue export]
+[content/pages.cue] ←─── [schema/model.cue]
+        ↓ uses          (型定義)
+[Page値集合]
         ↓
-[tmp/renderedPages.json]
+[render/html.cue]
+        ↓ references Fragments
+        ↓ generates HTML strings
+[renderedPages]
         ↓
-[cmd/html-printer]
+[cue export -e render.renderedPages]
         ↓
+[JSON: [{ path, html }]]
+        ↓
+   (このrepoのゴール)
+```
+
+**このrepo外のフロー**（利用者の責任範囲）:
+```
+[JSON]
+  ↓
+[サンプルスクリプト or 利用者独自ツール]
+  ↓
 [out/**/*.html]
+  ↓
+[デプロイ: R2, S3, etc.]
 ```
 
 ---
@@ -373,18 +399,34 @@
 
 ---
 
-## 5. 拡張ポイント
+## 5. サンプルスクリプトについて（オプション）
 
-### 5.1 新しいページ種別追加（例: "landing-page-v2"）
+### 位置づけ
+**このrepoの本質的な責務ではない**が、利用者の便宜のためにサンプルとして配置可能。
 
-**変更箇所**:
-1. `schema/model.cue`: `kind` に `"landing-page-v2"` 追加
-2. `render/layout.cue`: 新レイアウト関数追加
-3. `content/pages/lp-v2.cue`: 新規作成
+### `scripts/print-html.sh` の仕様
 
-**変更不要**:
-- Printer（JSON構造は同じ）
-- Test（自動的に検証対象になる）
+**責務**:
+- 標準入力 または JSONファイルから `renderedPages` を読む
+- 各要素について:
+  - `path` → `out/` 以下のディレクトリに変換（`/docs/intro` → `out/docs/intro/index.html`）
+  - `html` をそのまま書き出す
+- **テンプレート処理・条件分岐・レイアウト変更は一切しない**
+
+**制約**:
+- **500行未満厳守**（IOラッパーとして最小限）
+- CUEが決めた値を「そのまま吐くだけ」
+- このスクリプトに機能を追加していくことは禁止（別ツールを作るべき）
+
+**使用例**:
+```bash
+# 標準入力から読む
+cue export -e render.renderedPages | ./scripts/print-html.sh
+
+# ファイルから読む
+cue export -e render.renderedPages > pages.json
+./scripts/print-html.sh < pages.json
+```
 
 ### 5.2 htmx 動的差し替え機能追加（Phase 7）
 
@@ -398,105 +440,105 @@
 - Printer（HTML文字列は変わるが、JSON構造は同じ）
 - Makefile（ビルドフローは変わらない）
 
-### 5.3 マルチサイト対応
-
-**変更箇所**:
-1. `schema/model.cue`: `#Page` に `siteId: string` 追加
-2. `render/commands.cue`: サイトごとに JSON 分割
-3. `cmd/html-printer`: サイトごとに出力先ディレクトリ変更
-
----
-
-## 6. トレードオフの明示
-
-### 6.1 CUE vs Go の責務分担
-
-**採用案**: CUE = 型+データ+変換ロジック, Go = 出力のみ
-
-**トレードオフ**:
-- ✅ メリット: テンプレートロジックが一元化
-- ✅ メリット: CUE でのバリデーションが強力
-- ❌ デメリット: CUE の文字列操作が冗長になる可能性
-- ❌ デメリット: 大量ページ（1000+）では CUE が遅い可能性
-
-**代替案**: Go に変換ロジックも持たせる（html/template 等）
-- ✅ メリット: Go の方が文字列操作が楽
-- ❌ デメリット: 型とテンプレートが分離し、密結合が弱まる
-
-**結論**: 当面は CUE に寄せる。パフォーマンス問題が出たら Go 移行を検討。
-
-### 6.2 Go vs sh プリンタ
-
-**採用案**: Go版のみ実装
-
-**トレードオフ**:
-- ✅ メリット: 将来の拡張（minify, 差分出力）が楽
-- ✅ メリット: 依存ツールが少ない（jq不要）
-- ❌ デメリット: Go コードの保守が必要
-
-**代替案**: sh + jq
-- ✅ メリット: 実装が超簡単
-- ❌ デメリット: 複雑なロジック追加が困難
-
-**結論（v2）**: Go版のみ実装。sh版は v1 では作成しない（必要になったら後で追加）。
-
-### 6.3 スナップショットテストの粒度
-
-**採用案**: 3ファイルのみ（docs/article/lp 各1つ）
-
-**トレードオフ**:
-- ✅ メリット: 保守コストが低い
-- ❌ デメリット: 全パターンを網羅できない
-
-**代替案**: 全ページをスナップショット化
-- ✅ メリット: 完全な差分検出
-- ❌ デメリット: 保守コストが高すぎる
-
-**結論**: 最小限に留める。重要な変更は手動確認。
-
----
-
-## 7. セキュリティ考慮事項
-
-### 7.1 XSS 対策
-
 **リスク**: `bodyHtml` に `<script>` タグが混入
 
 **対策**:
-1. `bodyHtml` は **信頼できるコンテンツのみ** とする（UGC禁止）
-2. 将来UGCを扱う場合は、別レイヤーでサニタイズ
-3. CUE のバリデーションで `<script>` タグ検出（オプション）
+- `bodyHtml` は **信頼できるコンテンツのみ** とする（UGC禁止）
+- 将来UGCを扱う場合は、別レイヤーでサニタイズ
+- （オプション）CUE のバリデーションで `<script>` タグ検出
 
-### 7.2 Path Traversal
+### 6.2 Path Traversal（サンプルスクリプトの場合）
 
 **リスク**: `path: "../../etc/passwd"` のような悪意ある値
 
-**対策**:
-1. Printer側で path を正規化（`filepath.Clean`）
-2. `outDir` の外に書き込まないことを保証
-3. CUE のバリデーションで `path` の形式チェック（`/[a-z0-9/-]+`）
+**対策**（サンプルスクリプト実装時）:
+- path を正規化（不正な `..` を除去）
+- `outDir` の外に書き込まないことを保証
+- （オプション）CUE のバリデーションで `path` の形式チェック（`/[a-z0-9/-]+`）
 
 ---
 
-## 8. パフォーマンス考慮事項
+## 7. パフォーマンス考慮事項
 
-### 8.1 CUE の評価速度
+### 7.1 CUE の評価速度
 
 **想定**: 100ページ程度なら問題なし（< 1秒）
 
 **懸念**: 1000+ ページでは遅延の可能性
 
+**採用案**: Go版のみ実装
+
+### 7.2 HTML文字列サイズ
+
+**想定**: 1ページ数十KB程度なら問題なし
+
+**結論（v2）**: Go版のみ実装。sh版は v1 では作成しない（必要になったら後で追加）。
+
 **対策**:
-- Phase 6 後にベンチマーク実施
-- 遅い場合は Go側で並列化検討
-
-### 8.2 ファイル書き込み
-
-**想定**: 並列書き込みで高速化可能
-
-**対策**:
-- Go版で goroutine 使用（将来拡張）
+- `bodyHtml` には大きなデータを入れない（画像はURLで参照）
+- 必要に応じて minify を別ツールで実施（このrepoの範囲外）
 
 ---
 
-この Architecture ドキュメントは PLAN.md と合わせて、プロジェクトの全体像を提供します。
+## 8. 拡張ポイント（将来）
+
+### 8.1 新しいページ種別追加（例: "landing-page-v2"）
+
+**変更箇所**:
+1. `schema/model.cue`: `kind` に `"landing-page-v2"` 追加
+2. `render/html.cue`: `pageHtml` 内で kind による分岐を追加
+3. `content/pages.cue`: 新規ページ定義追加
+
+**変更不要**:
+- サンプルスクリプト（JSON構造は同じ）
+
+### 8.2 htmx 動的差し替え機能追加（Phase 7）
+
+**変更箇所**:
+1. `schema/model.cue`: `#Section` に `hxGet?`, `hxTarget?` フィールド追加
+2. `render/html.cue`: `sectionHtml` で `hxGet` が存在する場合 `hx-get` 属性を付与
+
+**変更不要**:
+- サンプルスクリプト（HTML文字列は変わるが、JSON構造は同じ）
+
+---
+
+## 9. トレードオフの明示
+
+### 9.1 CUE vs Go の責務分担
+
+**採用案**: CUE = 型+データ+HTML生成、外部 = 保存のみ
+
+**トレードオフ**:
+- ✅ メリット: 型とテンプレートが密結合、バリデーションが強力
+- ✅ メリット: ロジックが一元化（CUEを見ればすべて分かる）
+- ❌ デメリット: CUE の文字列操作が冗長になる可能性
+- ❌ デメリット: 大量ページ（1000+）では CUE が遅い可能性
+
+**結論**: 当面は CUE に寄せる。パフォーマンス問題が出たら Go 移行を検討。
+
+### 9.2 render/ を1ファイルに統合
+
+**採用案**: render/html.cue 1ファイルのみ
+
+**トレードオフ**:
+- ✅ メリット: シンプル、見通しが良い
+- ✅ メリット: 依存関係が明確
+- ❌ デメリット: ファイルが大きくなる可能性（数百行）
+
+**結論**: v1では1ファイルで進める。1000行を超えたら分割検討。
+
+### 9.3 サンプルスクリプトの提供
+
+**採用案**: scripts/print-html.sh をサンプルとして配置（オプション）
+
+**トレードオフ**:
+- ✅ メリット: 利用者がすぐに試せる
+- ❌ デメリット: サンプルが肥大化するリスク
+
+**結論**: 500行未満厳守。それを超える場合は別repoへ分離。
+
+---
+
+この v3 アーキテクチャは、**「CUEでpath+htmlを出すこと」に徹底的に集中**した設計です。
+それ以外の複雑さ（Build/Printer/CI等）は全て範囲外とし、利用者が必要に応じて追加する前提です。
