@@ -1,0 +1,19 @@
+# Generated HTML output
+out/
+
+# Temporary files
+tmp/
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# CUE cache
+.cue/
