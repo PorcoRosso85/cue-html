@@ -51,3 +51,11 @@ for p in pages {
 		_levelContinuity: true
 	}
 }
+
+// 5. parentId の整合性チェック
+// parentId が指定されている場合、同一ページ内の既存セクションIDを指す必要がある
+for p in pages for s in p.sections if s.parentId != _|_ {
+	let sectionIds = [ for sec in p.sections {sec.id}]
+	_parentIdValid: list.Contains(sectionIds, s.parentId)
+	_parentIdValid: true
+}

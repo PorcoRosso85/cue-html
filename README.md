@@ -1,6 +1,6 @@
 # CUE-HTML: CUE-based HTML Generation
 
-**このrepoのゴール**: `cue export -e render.renderedPages` で `[{ path, html }]` のJSONを出力すること。
+**このrepoのゴール**: `cue export -e renderedPages ./schema` で `[{ path, html }]` のJSONを出力すること。
 
 それ以上でも、それ以下でもない。
 
@@ -65,7 +65,7 @@ cd cue-html
 このrepoの主要なAPIです：
 
 ```bash
-cue export -e render.renderedPages
+cue export -e renderedPages ./schema
 ```
 
 出力例：
@@ -89,20 +89,20 @@ cue export -e render.renderedPages
 
 ```bash
 # scripts/print-html.sh を作成後
-cue export -e render.renderedPages | ./scripts/print-html.sh
+cue export -e renderedPages ./schema | ./scripts/print-html.sh
 ```
 
 または、独自ツールで実装：
 
 ```bash
 # Go
-cue export -e render.renderedPages | go run your-printer.go
+cue export -e renderedPages ./schema | go run your-printer.go
 
 # Python
-cue export -e render.renderedPages | python your-printer.py
+cue export -e renderedPages ./schema | python your-printer.py
 
 # jq + bash
-cue export -e render.renderedPages | jq -r '.[] | "\(.path) \(.html)"' | while read path html; do
+cue export -e renderedPages ./schema | jq -r '.[] | "\(.path) \(.html)"' | while read path html; do
   mkdir -p "out$(dirname $path)"
   echo "$html" > "out$path/index.html"
 done
@@ -204,7 +204,7 @@ cue vet ./...
 ### 4. 出力
 
 ```bash
-cue export -e render.renderedPages
+cue export -e renderedPages ./schema
 ```
 
 ---

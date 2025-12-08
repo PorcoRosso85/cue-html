@@ -25,7 +25,7 @@ fragments: {
 		title: "使い方"
 		bodyHtml: """
 			<p>基本的な使い方は非常にシンプルです：</p>
-			<pre><code>cue export -e render.renderedPages</code></pre>
+			<pre><code>cue export -e renderedPages ./schema</code></pre>
 			<p>これでJSON形式のページデータが出力されます。</p>
 			"""
 	}
