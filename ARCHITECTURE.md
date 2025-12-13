@@ -34,13 +34,13 @@
 │  schema/model.cue, schema/validation.cue                    │
 │  [責務] #Fragment/#Section/#Page 型定義と制約ルール           │
 └─────────────────────────────────────────────────────────────┘
-                            ↓ 使用
+                            ↓ defines & validates
 ┌─────────────────────────────────────────────────────────────┐
 │                   Render Layer (変換)                        │
 │  render/print-html.cue, render/layout.cue, render/export.cue│
 │  [責務] Fragment/Section/Page → HTML文字列への変換          │
 └─────────────────────────────────────────────────────────────┘
-                            ↓ 変換
+                            ↓ transforms
 ┌─────────────────────────────────────────────────────────────┐
 │              Export Layer (JSON生成)                         │
 │  render/export.cue                                          │
@@ -402,7 +402,12 @@ pages: [
 ## 5. サンプルスクリプトについて（オプション）
 
 ### 位置づけ
-**このrepoの本質的な責務ではない**が、利用者の便宜のためにサンプルとして配置可能。
+**重要**: `scripts/` 以下は **このrepoの正式なレイヤーではありません**。
+
+- このrepoの本質的な責務は「CUEで `renderedPages` を出力すること」まで
+- `scripts/print-html.sh` は、`renderedPages` JSON をファイルに保存するサンプルコード
+- 利用者の便宜のために配置可能だが、アーキテクチャの一部ではない
+- 利用者は独自のツール（Go, Python, Node.js等）で代替可能
 
 ### `scripts/print-html.sh` の仕様
 
